@@ -6,6 +6,7 @@ from av.container.streams cimport StreamContainer
 from av.dictionary cimport _Dictionary
 from av.packet cimport Packet
 from av.stream cimport Stream, wrap_stream
+from av.frame cimport Frame
 from av.utils cimport err_check, dict_to_avdict
 
 from av.dictionary import Dictionary
@@ -207,7 +208,8 @@ cdef class OutputContainer(Container):
         if packet.struct.stream_index < 0 or <unsigned int>packet.struct.stream_index >= self.ptr.nb_streams:
             raise ValueError('Bad Packet stream_index.')
         cdef lib.AVStream *stream = self.ptr.streams[packet.struct.stream_index]
-        packet._rebase_time(stream.time_base)
+        #packet._rebase_time(stream.time_base)
+        lib.av_packet_rescale_ts(&packet.struct, packet._time_base, stream.time_base)
 
         # Make another reference to the packet, as av_interleaved_write_frame
         # takes ownership of it.
@@ -219,3 +221,36 @@ cdef class OutputContainer(Container):
         with nogil:
             ret = lib.av_interleaved_write_frame(self.ptr, &packet_ref)
         self.err_check(ret)
+
+    def mux_frame(self, Stream stream not None, Frame frame=None):
+        context = stream.codec_context
+        if context.ptr.codec_type not in [lib.AVMEDIA_TYPE_VIDEO, lib.AVMEDIA_TYPE_AUDIO]:
+            raise NotImplementedError('Encoding is only supported for audio and video.')
+
+        context.open(strict=False)
+
+        frames = context._prepare_frames_for_encode(frame)
+
+        # Assert the frames are in our time base.
+        # TODO: Don't mutate time.
+        for frame in frames:
+            if frame is not None:
+                frame._rebase_time(context.ptr.time_base)
+
+        cdef int res
+        cdef Packet packet = None
+        for frame in frames:
+            with nogil:
+                res = lib.avcodec_send_frame(context.ptr, frame.ptr if frame is not None else NULL)
+            err_check(res)
+
+            out = []
+            while True:
+                packet = context._recv_packet()
+                if packet:
+                    packet._time_base = context.ptr.time_base
+                    packet._stream = stream
+                    packet.struct.stream_index = stream._stream.index
+                    self.mux_one(packet)
+                else:
+                    break

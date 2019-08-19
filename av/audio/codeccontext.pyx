@@ -40,7 +40,8 @@ cdef class AudioCodecContext(CodecContext):
         frame = self.resampler.resample(frame)
 
         cdef bint is_flushing = input_frame is None
-        cdef bint use_fifo = not (self.ptr.codec.capabilities & lib.CODEC_CAP_VARIABLE_FRAME_SIZE)
+        #cdef bint use_fifo = not (self.ptr.codec.capabilities & lib.CODEC_CAP_VARIABLE_FRAME_SIZE)
+        cdef bint use_fifo = False
 
         if use_fifo:
             if not self.fifo:
